@@ -2,23 +2,23 @@ cmake_minimum_required(VERSION 3.26)
 project(ambilight)
 
 set(CMAKE_CXX_STANDARD 20)
-
-add_executable(ambilight main.cpp)
-add_executable(ambilight_test test.cpp)
-
-# qt
-# to support #include <QLabel>
-##include <QPixmap>
-##include <QImage>
-##include <QColor>
-
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt5 COMPONENTS Widgets REQUIRED)
-target_link_libraries(ambilight Qt5::Widgets)
-target_link_libraries(ambilight_test Qt5::Widgets)
+add_executable(ambilight main.cpp
+        capturer_config.h
+        color.h
+        displayer.h
+        capturer.h
+        tray_app.h
+        serial_writer.h)
+add_executable(ambilight_test test.cpp)
+
+
+find_package(Qt6 COMPONENTS Widgets SerialPort REQUIRED)
+target_link_libraries(ambilight Qt6::Widgets Qt6::SerialPort)
+target_link_libraries(ambilight_test Qt6::Widgets Qt6::SerialPort)
 
 # x11
 find_package(X11 REQUIRED)
@@ -27,16 +27,17 @@ include_directories(${X11_INCLUDE_DIR})
 
 target_link_libraries(ambilight_test ${X11_LIBRARIES})
 
-# gstreamer
+# gtkmm
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GST REQUIRED gstreamer-1.0)
-pkg_check_modules(GST_APP REQUIRED gstreamer-app-1.0)
-pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0)
-include_directories(${GST_VIDEO_INCLUDE_DIRS})
-target_link_libraries(ambilight_test ${GST_VIDEO_LIBRARIES})
-include_directories(${GST_APP_INCLUDE_DIRS})
-target_link_libraries(ambilight_test ${GST_APP_LIBRARIES})
-include_directories(${GST_INCLUDE_DIRS})
-target_link_libraries(ambilight_test ${GST_LIBRARIES})
+pkg_check_modules(GTKMM gtkmm-3.0)
+include_directories(${GTKMM_INCLUDE_DIRS})
+link_directories(${GTKMM_LIBRARY_DIRS})
+target_link_libraries(ambilight ${GTKMM_LIBRARIES})
+target_link_libraries(ambilight_test ${GTKMM_LIBRARIES})
 
-
+#libappindicator
+pkg_check_modules(APPINDICATOR REQUIRED appindicator3-0.1)
+include_directories(${APPINDICATOR_INCLUDE_DIRS})
+link_directories(${APPINDICATOR_LIBRARY_DIRS})
+target_link_libraries(ambilight ${APPINDICATOR_LIBRARIES})
+target_link_libraries(ambilight_test ${APPINDICATOR_LIBRARIES})
