@@ -22,11 +22,12 @@
 
 
 class TrayApp : public QObject {
+Q_OBJECT
 
 public:
-    explicit TrayApp(Capturer &capturer) : capturer(capturer) {
-        createSettingsWindow();
-        createTrayIcon();
+    explicit TrayApp(AppSettings &settings, Capturer &capturer) : capturer(capturer), settings(settings) {
+        connect(this, &TrayApp::staticColorChanged, &capturer, &Capturer::setStaticColor);
+        connect(this, &TrayApp::staticColorSwitched, &capturer, &Capturer::enableStaticColor);
     }
 
     void createTrayIcon() {
@@ -77,7 +78,6 @@ public:
 
         layout->addWidget(brightnessLabel);
 
-        // brightness
         auto *brightnessLayout = new QHBoxLayout();
         layout->addLayout(brightnessLayout);
 
@@ -87,14 +87,12 @@ public:
         brightnessLayout->addWidget(brightnessSlider);
         connect(brightnessSlider, &QSlider::valueChanged, this, &TrayApp::setBrightness);
 
-        // value, next to the slider in format "value %"
         auto *brightnessValue = new QLabel("100%");
         brightnessLayout->addWidget(brightnessValue);
         connect(brightnessSlider, &QSlider::valueChanged, [brightnessValue](int value) {
             brightnessValue->setText(QString("%1%").arg(value));
         });
 
-        // separator
         auto *line = new QFrame;
         line->setFixedHeight(15);
         line->setFrameShadow(QFrame::Sunken);
@@ -105,7 +103,6 @@ public:
         staticColorLabel->setFont(labelFont);
         layout->addWidget(staticColorLabel);
 
-        // add switcher for static color, should be to the right of the label
         auto *staticColorSwitcherLayout = new QHBoxLayout();
         layout->addLayout(staticColorSwitcherLayout);
 
@@ -121,34 +118,44 @@ public:
 
         connect(staticColorSwitcher, &QCheckBox::stateChanged, [this](int state) {
             if (state == Qt::Checked) {
-                capturer.setStaticColor(true, staticColor);
+                settings.enableStaticColor = true;
+                emit staticColorSwitched();
             } else {
-                capturer.setStaticColor(false);
+                settings.enableStaticColor = false;
+                emit staticColorSwitched();
             }
         });
 
-        // when clicked on the static color box, open color picker and set the color
         connect(staticColorBox, &QPushButton::clicked, [this]() {
-            staticColor = QColorDialog::getColor(Qt::white, settingsWindow);
-            if (staticColor.isValid()) {
+            auto color = QColorDialog::getColor(Qt::white, settingsWindow);
+            if (color.isValid()) {
                 staticColorBox->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-                                                      .arg(staticColor.red())
-                                                      .arg(staticColor.green())
-                                                      .arg(staticColor.blue()));
+                                                      .arg(color.red())
+                                                      .arg(color.green())
+                                                      .arg(color.blue()));
 
-                if (staticColorSwitcher->isChecked()) {
-                    capturer.setStaticColor(staticColor);
-                }
+                settings.staticColor = color;
+                emit staticColorChanged();
             }
         });
 
-        // make the cross button close the window, not the whole app
         settingsWindow->setAttribute(Qt::WA_QuitOnClose, false);
 
         settingsWindow->show();
     }
 
+signals:
+
+    void staticColorChanged();
+
+    void staticColorSwitched();
+
 public slots:
+
+    void start() {
+        createSettingsWindow();
+        createTrayIcon();
+    }
 
     void startCapturer() {
         capturer.restart();
@@ -178,6 +185,9 @@ public slots:
     }
 
 private:
+    Capturer &capturer;
+    AppSettings &settings;
+
     QAction *startAction;
     QAction *stopAction;
 
@@ -185,10 +195,7 @@ private:
 
     QSystemTrayIcon *trayIcon;
     QPushButton *staticColorBox;
-    QColor staticColor;
     QCheckBox *staticColorSwitcher;
-
-    Capturer &capturer;
 };
 
 #endif //AMBILIGHT_TRAY_APP_H

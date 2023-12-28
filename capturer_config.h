@@ -8,8 +8,6 @@
 struct CapturerConfig {
     int ledX; // number of leds on the top and bottom of the screen
     int ledY; // number of leds on the left and right of the screen
-    int screenWidth; // width of the screen
-    int screenHeight; // height of the screen
     int zoneOffsetX; // the width of the zone where average color is calculated (in pixels, from the left and right)
     int zoneOffsetY; // the height of the zone where average color is calculated (in pixels, from the top and bottom)
     int captureFPS; // the number of frames per second to capture

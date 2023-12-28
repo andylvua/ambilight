@@ -7,6 +7,11 @@
 
 #include <iostream>
 
+#include <QtCore/QDebug>
+#include <QtCore/QByteArray>
+#include <QtGui/QColor>
+
+
 struct Color {
     int red;
     int green;
@@ -16,6 +21,12 @@ struct Color {
         this->red = red;
         this->green = green;
         this->blue = blue;
+    }
+
+    Color(const QColor &color) {
+        this->red = color.red();
+        this->green = color.green();
+        this->blue = color.blue();
     }
 
     Color() = default;
@@ -54,6 +65,18 @@ struct Color {
 
         return data;
     }
+
+    static QVector<Color> toColors(const Color &color, qsizetype size) {
+        QVector<Color> colors(size);
+        colors.fill(color);
+        return colors;
+    }
+
+//    static QVector<Color> toColors(const QColor &color, qsizetype size) {
+//        QVector<Color> colors(size);
+//        colors.fill(Color(color));
+//        return colors;
+//    }
 
     friend QDebug operator<<(QDebug debug, const Color &color) {
         QDebugStateSaver saver(debug);

@@ -5,59 +5,62 @@
 #ifndef AMBILIGHT_CAPTURER_H
 #define AMBILIGHT_CAPTURER_H
 
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
-#include <QtGui/QPainter>
 #include <QtCore/QVector>
 #include <QtCore/QThreadPool>
 #include <QtCore/QFuture>
-#include <QtConcurrent/QtConcurrent>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <QtSerialPort/QSerialPort>
+#include <QtGui/QPainter>
+#include <QtConcurrent/QtConcurrent>
 
 #include <vector>
 #include <iostream>
 
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-
 #include "capturer_config.h"
 #include "color.h"
 #include "displayer.h"
+#include "app_settings.h"
 #include "serial_writer.h"
+#include "xdisplay.h"
 
 
 class Capturer : public QObject {
 Q_OBJECT
 
 public:
-    explicit Capturer(CapturerConfig &config, Display *display, Window root) : serialWriter() {
-        this->config = config;
-        this->display = display;
-        this->root = root;
-
+    Capturer(AppSettings &settings, XDisplay &display, Displayer &displayer) :
+            settings(settings), display(display), displayer(displayer) {
         initZoneProperties();
 
-        previousColors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
-        colors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
+        previousColors = QVector<Color>(colorsSize());
+        colors = QVector<Color>(colorsSize());
 
-        qDebug() << "Enter this number of LEDs in the Arduino sketch: " << config.ledX * 2 + config.ledY * 2;
+        qDebug() << "Enter this number of LEDs in the Arduino sketch: " << colorsSize();
 
         QThreadPool::globalInstance()->setMaxThreadCount(4);
 
-        // connect sendColors signal to serialWriter write slot
         connect(this, &Capturer::sendColors, &serialWriter, &SerialWriter::write);
+        connect(this, &Capturer::displayColors, &displayer, &Displayer::render);
     }
 
     void initZoneProperties() {
-        zoneConfig.widthY = zoneConfig.widthX = config.screenWidth / (config.ledX + 2);
+        auto &config = settings.capturerConfig;
+
+        zoneConfig.widthY = zoneConfig.widthX = display.width / (config.ledX + 2);
         zoneConfig.widthY += config.zoneOffsetX;
-        zoneConfig.heightX = zoneConfig.heightY = config.screenHeight / (config.ledY + 2);
+        zoneConfig.heightX = zoneConfig.heightY = display.height / (config.ledY + 2);
         zoneConfig.heightX += config.zoneOffsetY;
 
-        zoneConfig.rowOffset = (config.screenWidth % (config.ledX + 2)) / 2;
-        zoneConfig.colOffset = (config.screenHeight % (config.ledY + 2)) / 2;
+        zoneConfig.rowOffset = (display.width % (config.ledX + 2)) / 2;
+        zoneConfig.colOffset = (display.height % (config.ledY + 2)) / 2;
+    }
+
+    [[nodiscard]] qsizetype colorsSize() const {
+        return settings.capturerConfig.ledX * 2 + settings.capturerConfig.ledY * 2;
     }
 
     Color getAverageColor(XImage *image, int x, int y, int width, int height) const {
@@ -66,7 +69,7 @@ public:
         int blue = 0;
 
         int counter = 0;
-        int skip = width * height / config.pixelsPerZone;
+        int skip = width * height / settings.capturerConfig.pixelsPerZone;
         for (int i = 0; i < width * height; i += skip) {
             int pixel = XGetPixel(image, x + i % width, y + i / width);
             red += pixel >> 16 & 0xFF;
@@ -82,9 +85,9 @@ public:
 
     [[nodiscard]] QVector<Color> getColors() const {
         QVector<Color> res;
-        res.reserve(config.ledX * 2 + config.ledY * 2);
+        res.reserve(colorsSize());
 
-        for (int i = 0; i < config.ledX; i++) {
+        for (int i = 0; i < settings.capturerConfig.ledX; i++) {
             auto color = getAverageColor(screenImage.bottomPanel,
                                          (i + 1) * zoneConfig.widthX + zoneConfig.rowOffset,
                                          0,
@@ -92,7 +95,7 @@ public:
                                          zoneConfig.heightX);
             res.push_back(color);
         }
-        for (int i = config.ledY - 1; i >= 0; i--) {
+        for (int i = settings.capturerConfig.ledY - 1; i >= 0; i--) {
             auto color = getAverageColor(screenImage.rightPanel,
                                          0,
                                          (i + 1) * zoneConfig.heightY + zoneConfig.colOffset,
@@ -100,7 +103,7 @@ public:
                                          zoneConfig.heightY);
             res.push_back(color);
         }
-        for (int i = config.ledX - 1; i >= 0; i--) {
+        for (int i = settings.capturerConfig.ledX - 1; i >= 0; i--) {
             auto color = getAverageColor(screenImage.topPanel,
                                          (i + 1) * zoneConfig.widthX + zoneConfig.rowOffset,
                                          0,
@@ -108,7 +111,7 @@ public:
                                          zoneConfig.heightX);
             res.push_back(color);
         }
-        for (int i = 0; i < config.ledY; i++) {
+        for (int i = 0; i < settings.capturerConfig.ledY; i++) {
             auto color = getAverageColor(screenImage.leftPanel,
                                          0,
                                          (i + 1) * zoneConfig.heightY + zoneConfig.colOffset,
@@ -122,15 +125,18 @@ public:
 
     void interpolateColors() {
         QVector<Color> interpolatedColors;
-        interpolatedColors.resize(config.ledX * 2 + config.ledY * 2);
+        interpolatedColors.resize(colors.size());
 
         auto totalElapsed = QElapsedTimer();
         totalElapsed.start();
 
-        auto totalFramesToInterpolate = config.targetFPS - config.captureFPS;
-        auto framesToInterpolate = totalFramesToInterpolate / config.captureFPS;
+        auto targetFPS = settings.capturerConfig.targetFPS;
+        auto captureFPS = settings.capturerConfig.captureFPS;
+
+        auto totalFramesToInterpolate = targetFPS - captureFPS;
+        auto framesToInterpolate = totalFramesToInterpolate / captureFPS;
         auto framesToRender = framesToInterpolate + 1;
-        auto captureTimeMs = 1000 / config.captureFPS;
+        auto captureTimeMs = 1000 / captureFPS;
         auto frameDuration = captureTimeMs / framesToRender;
 
         QVector<Color> initColors = colors;
@@ -156,13 +162,18 @@ public:
     }
 
     QVector<Color> convolveColors(QVector<Color> &&_colors) const {
+        auto convolveSize = settings.capturerConfig.convolveSize;
+        if (convolveSize <= 1) {
+            return _colors;
+        }
+
         QVector<Color> convolvedColors;
         convolvedColors.resize(_colors.size());
 
         for (auto i = 0; i < _colors.size(); i++) {
             Color convolvedColor = {0, 0, 0};
-            for (auto j = 0; j < config.convolveSize; j++) {
-                auto index = i + j - config.convolveSize / 2;
+            for (auto j = 0; j < convolveSize; j++) {
+                long index = i + j - convolveSize / 2;
                 if (index < 0) {
                     index = 0;
                 } else if (index >= _colors.size()) {
@@ -170,7 +181,7 @@ public:
                 }
                 convolvedColor = convolvedColor + _colors[index];
             }
-            convolvedColors[i] = convolvedColor * (1.0 / config.convolveSize);
+            convolvedColors[i] = convolvedColor * (1.0 / convolveSize);
         }
 
         return convolvedColors;
@@ -178,20 +189,40 @@ public:
 
     void captureImages() {
         auto leftPanelFuture = QtConcurrent::run([this] {
-            return XGetImage(display, root, 0, zoneConfig.heightY, zoneConfig.widthY,
-                             config.screenHeight - zoneConfig.heightY, AllPlanes, ZPixmap);
+            return XGetImage(display.display,
+                             display.root,
+                             0,
+                             zoneConfig.heightY,
+                             zoneConfig.widthY,
+                             display.height - zoneConfig.heightY,
+                             AllPlanes, ZPixmap);
         });
         auto rightPanelFuture = QtConcurrent::run([this] {
-            return XGetImage(display, root, config.screenWidth - zoneConfig.widthY, zoneConfig.heightY,
-                             zoneConfig.widthY, config.screenHeight - zoneConfig.heightY, AllPlanes, ZPixmap);
+            return XGetImage(display.display,
+                             display.root,
+                             display.width - zoneConfig.widthY,
+                             zoneConfig.heightY,
+                             zoneConfig.widthY,
+                             display.height - zoneConfig.heightY,
+                             AllPlanes, ZPixmap);
         });
         auto topPanelFuture = QtConcurrent::run([this] {
-            return XGetImage(display, root, zoneConfig.widthX, 0, config.screenWidth - zoneConfig.widthX,
-                             zoneConfig.heightX, AllPlanes, ZPixmap);
+            return XGetImage(display.display,
+                             display.root,
+                             zoneConfig.widthX,
+                             0,
+                             display.width - zoneConfig.widthX,
+                             zoneConfig.heightX,
+                             AllPlanes, ZPixmap);
         });
         auto bottomPanelFuture = QtConcurrent::run([this] {
-            return XGetImage(display, root, zoneConfig.widthX, config.screenHeight - zoneConfig.heightX,
-                             config.screenWidth - zoneConfig.widthX, zoneConfig.heightX, AllPlanes, ZPixmap);
+            return XGetImage(display.display,
+                             display.root,
+                             zoneConfig.widthX,
+                             display.height - zoneConfig.heightX,
+                             display.width - zoneConfig.widthX,
+                             zoneConfig.heightX,
+                             AllPlanes, ZPixmap);
         });
 
         screenImage.leftPanel = leftPanelFuture.result();
@@ -210,20 +241,18 @@ public:
     }
 
     void start() {
-        captureTimer = new QTimer(this);
+        captureTimer = new QTimer(nullptr);
 
         connect(captureTimer, &QTimer::timeout, this, &Capturer::capture);
-        captureTimer->setInterval(1000 / config.captureFPS);
+        captureTimer->setInterval(1000 / settings.capturerConfig.captureFPS);
         captureTimer->start();
 
         capture();
     }
 
     void restart() {
-        if (staticColorEnabled) {
-            auto staticColors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
-            staticColors.fill(Color(staticColor.red(), staticColor.green(), staticColor.blue()));
-            animateColorChange(staticColors);
+        if (settings.enableStaticColor) {
+            setStaticColor();
             return;
         }
         captureTimer->start();
@@ -233,22 +262,18 @@ public:
 
     void stop(bool turnOff = true) {
         captureTimer->stop();
+//        disconnect(captureTimer, &QTimer::timeout, this, &Capturer::capture);
+
         if (turnOff) {
             this->turnOff();
         }
     }
 
     void turnOff() {
-        auto staticColors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
-        staticColors.fill(Color(0, 0, 0));
+        auto staticColors = Color::toColors({0, 0, 0}, colorsSize());
         animateColorChange(staticColors);
     }
 
-    void setBrightness(int value) {
-        colorConfig.brightness = value;
-
-        renderColors();
-    }
 
     void animateColorChange(QVector<Color> &_colors) {
         previousColors = colors;
@@ -268,10 +293,11 @@ public:
             color = color * brightness;
         }
 
-        if (config.GUI) {
-            Displayer::getInstance()->display(_colors);
+        if (settings.enableGUI) {
+            displayer.setColors(_colors);
+            emit displayColors();
         } else {
-            QVector<Color> testColors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
+            QVector<Color> testColors = QVector<Color>(colorsSize());
             if (changeColorCounter % 300 == 0) {
                 // assign random colors
                 firstColor = {rand() % 255, rand() % 255, rand() % 255};
@@ -284,30 +310,7 @@ public:
         }
     }
 
-    void setStaticColor(bool enabled, QColor color = QColor()) {
-        if (enabled) {
-            staticColorEnabled = true;
-            staticColor = color;
-            stop(false);
-            setStaticColor(color);
-        } else {
-            staticColorEnabled = false;
-            restart();
-        }
-    }
 
-    void setStaticColor(QColor color) {
-        staticColor = color;
-
-        auto staticColors = QVector<Color>(config.ledX * 2 + config.ledY * 2);
-        staticColors.fill(Color(color.red(), color.green(), color.blue()));
-
-        if (config.GUI) {
-            animateColorChange(staticColors);
-        } else {
-            emit sendColors(staticColors);
-        }
-    }
 
 private slots:
 
@@ -321,16 +324,46 @@ private slots:
         interpolateColors();
     }
 
+public slots:
+    void enableStaticColor() {
+        if (settings.enableStaticColor) {
+            stop(false);
+            setStaticColor();
+        } else {
+            restart();
+        }
+    }
+
+    void setStaticColor() {
+        if (!settings.enableStaticColor) {
+            return;
+        }
+
+        auto staticColors = Color::toColors(settings.staticColor, colorsSize());
+
+        if (settings.enableGUI) {
+            animateColorChange(staticColors);
+        } else {
+            emit sendColors(staticColors);
+        }
+    }
+
+    void setBrightness(int value) {
+        colorConfig.brightness = value;
+
+        renderColors();
+    }
 
 signals:
 
     void sendColors(QVector<Color> colors);
 
-private:
-    CapturerConfig config{};
+    void displayColors();
 
-    Display *display = nullptr;
-    Window root = 0;
+private:
+    AppSettings &settings;
+    Displayer &displayer;
+    XDisplay display;
 
     struct ScreenImage {
         XImage *leftPanel = nullptr;
@@ -356,9 +389,6 @@ private:
 
     QVector<Color> previousColors;
     QVector<Color> colors;
-
-    QColor staticColor;
-    bool staticColorEnabled = false;
 
     SerialWriter serialWriter;
 };

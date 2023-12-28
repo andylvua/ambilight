@@ -11,32 +11,47 @@
 
 #include "color.h"
 #include "capturer_config.h"
+#include "app_settings.h"
+#include "xdisplay.h"
+
 
 class Displayer : public QWidget {
 
 public:
-    static Displayer *getInstance() {
-        if (singleton == nullptr) {
-            singleton = new Displayer();
-        }
-        return singleton;
+
+    Displayer(AppSettings &settings, XDisplay &display) : settings(settings), display(display) {
+        setWindowTitle("Ambilight");
+        setWindowIcon(QIcon("../ambilight.png"));
+        // make full screen
+//        setGeometry(0, 0, display.width, display.height);
+
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_OpaquePaintEvent);
+
+        setStyleSheet("background:transparent;");
+
+//        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     }
 
-    void display(const QVector<Color> &_colors) {
+    void setColors(QVector<Color> &_colors) {
         this->colors = _colors;
+    }
+
+    void render() {
         repaint();
     }
 
-    void setConfig(CapturerConfig &_config) {
-        this->config = _config;
-    }
-
+protected:
     void paintEvent(QPaintEvent *event) override {
         QPainter painter(this);
         int width = this->width();
         int height = this->height();
-        double scaleX = static_cast<double>(config.screenWidth) / width;
-        double scaleY = static_cast<double>(config.screenHeight) / height;
+        double scaleX = static_cast<double>(display.width) / width;
+        double scaleY = static_cast<double>(display.height) / height;
+
+        auto &config = settings.capturerConfig;
+
         int xLedWidth = width / (config.ledX + 2);
         int yLedHeight = height / (config.ledY + 2);
         int xLedHeight =
@@ -77,11 +92,9 @@ public:
     }
 
 private:
-    static Displayer *singleton;
-    CapturerConfig config{};
+    AppSettings &settings;
+    XDisplay display;
     QVector<Color> colors;
-
-    Displayer() = default;
 };
 
 #endif //AMBILIGHT_DISPLAYER_H
