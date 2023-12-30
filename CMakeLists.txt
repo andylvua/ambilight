@@ -22,6 +22,10 @@ find_package(Qt6 COMPONENTS Widgets SerialPort REQUIRED)
 target_link_libraries(ambilight Qt6::Widgets Qt6::SerialPort)
 target_link_libraries(ambilight_test Qt6::Widgets Qt6::SerialPort)
 
+# QT_NO_KEYWORDS is needed to avoid conflict with X11
+target_compile_definitions(ambilight PRIVATE QT_NO_KEYWORDS)
+target_compile_definitions(ambilight_test PRIVATE QT_NO_KEYWORDS)
+
 # x11
 find_package(X11 REQUIRED)
 target_link_libraries(ambilight ${X11_LIBRARIES})
@@ -43,3 +47,8 @@ include_directories(${APPINDICATOR_INCLUDE_DIRS})
 link_directories(${APPINDICATOR_LIBRARY_DIRS})
 target_link_libraries(ambilight ${APPINDICATOR_LIBRARIES})
 target_link_libraries(ambilight_test ${APPINDICATOR_LIBRARIES})
+
+# tbb
+find_package(TBB REQUIRED)
+target_link_libraries(ambilight TBB::tbb)
+target_link_libraries(ambilight_test TBB::tbb)

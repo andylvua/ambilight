@@ -37,12 +37,20 @@ public:
         auto *trayMenu = new QMenu();
 
         startAction = new QAction("Start", this);
-        connect(startAction, &QAction::triggered, this, &TrayApp::startCapturer);
+        connect(startAction, &QAction::triggered, this, [this]() {
+            startAction->setVisible(false);
+            stopAction->setVisible(true);
+        });
+        connect(startAction, &QAction::triggered, &capturer, &Capturer::restart);
         trayMenu->addAction(startAction);
         startAction->setVisible(false);
 
         stopAction = new QAction("Stop", this);
-        connect(stopAction, &QAction::triggered, this, &TrayApp::stopCapturer);
+        connect(stopAction, &QAction::triggered, this, [this]() {
+            startAction->setVisible(true);
+            stopAction->setVisible(false);
+        });
+        connect(stopAction, SIGNAL(triggered()), &capturer, SLOT(stop()));
         trayMenu->addAction(stopAction);
 
         auto *quitAction = new QAction("Quit", this);
@@ -119,14 +127,14 @@ public:
         connect(staticColorSwitcher, &QCheckBox::stateChanged, [this](int state) {
             if (state == Qt::Checked) {
                 settings.enableStaticColor = true;
-                emit staticColorSwitched();
+                Q_EMIT staticColorSwitched();
             } else {
                 settings.enableStaticColor = false;
-                emit staticColorSwitched();
+                Q_EMIT staticColorSwitched();
             }
         });
 
-        connect(staticColorBox, &QPushButton::clicked, [this]() {
+        connect(staticColorBox, &QPushButton::clicked, this, [this]() {
             auto color = QColorDialog::getColor(Qt::white, settingsWindow);
             if (color.isValid()) {
                 staticColorBox->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
@@ -135,38 +143,30 @@ public:
                                                       .arg(color.blue()));
 
                 settings.staticColor = color;
-                emit staticColorChanged();
+
+                if (settings.enableStaticColor) {
+                    Q_EMIT staticColorChanged();
+                }
             }
-        });
+        }, Qt::QueuedConnection);
 
         settingsWindow->setAttribute(Qt::WA_QuitOnClose, false);
 
         settingsWindow->show();
     }
 
-signals:
+Q_SIGNALS:
 
     void staticColorChanged();
 
     void staticColorSwitched();
 
-public slots:
+public Q_SLOTS:
 
     void start() {
+        qDebug() << "TrayApp is running in thread " << QThread::currentThreadId();
         createSettingsWindow();
         createTrayIcon();
-    }
-
-    void startCapturer() {
-        capturer.restart();
-        startAction->setVisible(false);
-        stopAction->setVisible(true);
-    }
-
-    void stopCapturer() {
-        capturer.stop();
-        stopAction->setVisible(false);
-        startAction->setVisible(true);
     }
 
     void setBrightness(int value) {

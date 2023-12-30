@@ -23,7 +23,7 @@ public:
         auto availablePort = QSerialPortInfo::availablePorts().first();
 
         serialPort->setPortName(availablePort.portName());
-        serialPort->setBaudRate(250'000);
+        serialPort->setBaudRate(250000);
         serialPort->setDataBits(QSerialPort::Data8);
         serialPort->setParity(QSerialPort::NoParity);
         serialPort->setStopBits(QSerialPort::OneStop);
@@ -53,27 +53,46 @@ public:
 
         connect(serialPort, &QSerialPort::readyRead, [&]() {
             QByteArray data = serialPort->readAll();
-            data.chop(2);
-            qDebug() << "Sent" << sendCount << "times, received" << data;
-            qDebug() << "First color sent:" << firstColor << ", last color sent:" << lastColor;
-            sendCount = 0;
+            qDebug() << "RECIEVED SOME DATA: " << data;
         });
  }
 
-public slots:
+public Q_SLOTS:
 
     void write(const QVector<Color> &colors) {
+        // remove each 2nd color to reduce data size
+//        QVector<Color> reducedColors;
+//        for (int i = 0; i < colors.size(); i++) {
+//            if (i % 2 == 0) {
+//                reducedColors.append(colors[i]);
+//            }
+//        }
+
         auto data = Color::toByteArray(colors);
 
-        firstColor = colors.first();
-        lastColor = colors.last();
-
-        serialPort->write(data);
-//        serialPort->flush();
-
-        if (!serialPort->waitForBytesWritten(1000)) {
-            throw std::runtime_error("Write error");
+        // if "Ada" is contained among data, print ADA IN DATA to stdout
+        bool ada = false;
+        for (int i; i < data.size() - 2; i++) {
+            if (data[i] == 'A' && data[i + 1] == 'd' && data [i + 2] == 'a') {
+                ada = true;
+                break;
+            }
         }
+
+        if (ada) {
+            qDebug() << "ADDDDDDDDAAAAAAAA DSJKFHSDJKFHKJDSHFKJSDHF";
+        }
+
+
+        serialPort->write("Ada");
+
+//        qDebug() << "Sending array where first color is " << colors.first() << " and last color is " << colors.last();
+        serialPort->write(data);
+        serialPort->flush();
+//
+//        if (!serialPort->waitForBytesWritten(1000)) {
+//            throw std::runtime_error("Write error");
+//        }
 
         sendCount++;
     }

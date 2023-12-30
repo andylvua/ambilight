@@ -22,7 +22,7 @@ int main(int argc, char *argv[]) {
     QSettings settings("../config.ini", QSettings::IniFormat);
 
     AppSettings appSettings(settings);
-    appSettings.enableGUI = true;
+    appSettings.enableGUI = false;
 
     XDisplay xDisplay = {
             .display = display,
@@ -30,6 +30,9 @@ int main(int argc, char *argv[]) {
             .width = width,
             .height = height
     };
+
+    std::cout << "width: " << width << std::endl;
+    std::cout << "height: " << height << std::endl;
 
     Displayer displayer(appSettings, xDisplay);
 
@@ -40,11 +43,12 @@ int main(int argc, char *argv[]) {
     auto *capturerThread = new QThread();
     capturer.moveToThread(capturerThread);
 
-    QObject::connect(capturerThread, &QThread::started, &capturer, &Capturer::start);
     QObject::connect(capturerThread, &QThread::started, &trayApp, &TrayApp::start);
+    QObject::connect(capturerThread, &QThread::started, &capturer, &Capturer::start);
+
     capturerThread->start();
 
-    displayer.show();
+//    displayer.show();
 
     return QApplication::exec();
 }

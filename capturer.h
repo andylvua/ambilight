@@ -17,6 +17,10 @@
 #include <QtGui/QPainter>
 #include <QtConcurrent/QtConcurrent>
 
+// use tbb concurrent bounded
+#include <tbb/concurrent_queue.h>
+
+#include <utility>
 #include <vector>
 #include <iostream>
 
@@ -27,6 +31,68 @@
 #include "serial_writer.h"
 #include "xdisplay.h"
 
+
+class ColorSender : public QObject {
+Q_OBJECT
+
+public:
+    explicit ColorSender() {
+        connect(this, &ColorSender::sendColors, &serialWriter, &SerialWriter::write);
+    }
+
+    void send() {
+//        qDebug() << "ColorSender send in thread: " << QThread::currentThreadId();
+        if (isProcessing) {
+            Q_EMIT sendColors(processedColors);
+            isProcessing = false;
+        } else {
+            timeoutCounter++;
+            if (timeoutCounter >= timeoutSlots) {
+                timeout = true;
+                timeoutCounter = 0;
+            }
+        }
+
+        if (timeout) {
+            disconnect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
+        }
+    }
+
+public Q_SLOTS:
+
+    void start() {
+        sendTimer = new QTimer(nullptr);
+        connect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
+        sendTimer->setInterval(1000 / 40);
+        sendTimer->start();
+    }
+
+    void processColors(const QVector<Color> &colors) {
+        if (timeout) {
+            timeout = false;
+            connect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
+        }
+
+        processedColors = colors;
+        isProcessing = true;
+    }
+
+Q_SIGNALS:
+
+    void sendColors(QVector<Color> colors);
+
+private:
+    static constexpr auto timeoutSlots = 3;
+
+    QTimer *sendTimer;
+    SerialWriter serialWriter;
+
+    QVector<Color> processedColors;
+
+    bool isProcessing = false;
+    bool timeout = false;
+    int timeoutCounter = 0;
+};
 
 class Capturer : public QObject {
 Q_OBJECT
@@ -43,8 +109,15 @@ public:
 
         QThreadPool::globalInstance()->setMaxThreadCount(4);
 
-        connect(this, &Capturer::sendColors, &serialWriter, &SerialWriter::write);
+        connect(this, &Capturer::sendColors, &colorSender, &ColorSender::processColors);
         connect(this, &Capturer::displayColors, &displayer, &Displayer::render);
+
+        auto *colorSenderThread = new QThread();
+        colorSender.moveToThread(colorSenderThread);
+
+        QObject::connect(colorSenderThread, &QThread::started, &colorSender, &ColorSender::start);
+
+        colorSenderThread->start();
     }
 
     void initZoneProperties() {
@@ -241,6 +314,8 @@ public:
     }
 
     void start() {
+        qDebug() << "Capturer running in thread: " << QThread::currentThreadId();
+
         captureTimer = new QTimer(nullptr);
 
         connect(captureTimer, &QTimer::timeout, this, &Capturer::capture);
@@ -260,14 +335,7 @@ public:
         capture();
     }
 
-    void stop(bool turnOff = true) {
-        captureTimer->stop();
-//        disconnect(captureTimer, &QTimer::timeout, this, &Capturer::capture);
 
-        if (turnOff) {
-            this->turnOff();
-        }
-    }
 
     void turnOff() {
         auto staticColors = Color::toColors({0, 0, 0}, colorsSize());
@@ -282,10 +350,6 @@ public:
     }
 
     void renderColors() {
-        static int changeColorCounter = 0;
-        static Color firstColor = {45, 65, 112};
-        static Color secondColor = {75, 213, 50};
-
         auto _colors = colors;
 
         auto brightness = colorConfig.brightness / 100.0;
@@ -295,26 +359,18 @@ public:
 
         if (settings.enableGUI) {
             displayer.setColors(_colors);
-            emit displayColors();
+            Q_EMIT displayColors();
         } else {
-            QVector<Color> testColors = QVector<Color>(colorsSize());
-            if (changeColorCounter % 300 == 0) {
-                // assign random colors
-                firstColor = {rand() % 255, rand() % 255, rand() % 255};
-                secondColor = {rand() % 255, rand() % 255, rand() % 255};
-            }
-            testColors.first() = firstColor;
-            testColors.last() = secondColor;
-            emit sendColors(testColors);
-            changeColorCounter++;
+            Q_EMIT sendColors(_colors);
         }
     }
 
 
 
-private slots:
+private Q_SLOTS:
 
     void capture() {
+        qDebug() << "Capturer capture in thread: " << QThread::currentThreadId();
         destroyImages();
         captureImages();
 
@@ -324,7 +380,17 @@ private slots:
         interpolateColors();
     }
 
-public slots:
+public Q_SLOTS:
+    void stop(bool turnOff = true) {
+        qDebug() << "Executing stop()";
+        captureTimer->stop();
+
+        if (turnOff) {
+            qDebug() << "Turning off";
+            this->turnOff();
+        }
+    }
+
     void enableStaticColor() {
         if (settings.enableStaticColor) {
             stop(false);
@@ -341,11 +407,7 @@ public slots:
 
         auto staticColors = Color::toColors(settings.staticColor, colorsSize());
 
-        if (settings.enableGUI) {
-            animateColorChange(staticColors);
-        } else {
-            emit sendColors(staticColors);
-        }
+        animateColorChange(staticColors);
     }
 
     void setBrightness(int value) {
@@ -354,7 +416,7 @@ public slots:
         renderColors();
     }
 
-signals:
+Q_SIGNALS:
 
     void sendColors(QVector<Color> colors);
 
@@ -382,7 +444,7 @@ private:
     } zoneConfig;
 
     struct ColorConfig {
-        int brightness = 100;
+        int brightness = 50;
     } colorConfig;
 
     QTimer *captureTimer;
@@ -390,7 +452,8 @@ private:
     QVector<Color> previousColors;
     QVector<Color> colors;
 
-    SerialWriter serialWriter;
+//    SerialWriter serialWriter;
+    ColorSender colorSender;
 };
 
 #endif //AMBILIGHT_CAPTURER_H
