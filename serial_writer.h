@@ -72,19 +72,35 @@ public Q_SLOTS:
 
         // if "Ada" is contained among data, print ADA IN DATA to stdout
         bool ada = false;
-        for (int i; i < data.size() - 2; i++) {
-            if (data[i] == 'A' && data[i + 1] == 'd' && data [i + 2] == 'a') {
+        for (int i = 0; i < data.size() - 2; i++) {
+            if (data[i] == 'A' && data[i + 1] == 'd' && data[i + 2] == 'a') {
                 ada = true;
                 break;
             }
         }
-
         if (ada) {
-            qDebug() << "ADDDDDDDDAAAAAAAA DSJKFHSDJKFHKJDSHFKJSDHF";
+            qDebug() << "ADA IN DATA";
         }
 
 
-        serialPort->write("Ada");
+
+
+        serialPort->write("rcv");
+        // immediately following the magic word
+        //// are three bytes: a 16-bit count of the number of LEDs (high byte
+        //// first) followed by a simple checksum value (high byte XOR low byte
+        //// XOR 0x55)
+        uint16_t count = colors.size();
+        uint8_t highByte = count >> 8;
+        uint8_t lowByte = count & 0xFF;
+        uint8_t checksum = highByte ^ lowByte ^ 0x55;
+
+        serialPort->write(reinterpret_cast<const char *>(&highByte), 1);
+        serialPort->write(reinterpret_cast<const char *>(&lowByte), 1);
+        serialPort->write(reinterpret_cast<const char *>(&checksum), 1);
+
+
+
 
 //        qDebug() << "Sending array where first color is " << colors.first() << " and last color is " << colors.last();
         serialPort->write(data);

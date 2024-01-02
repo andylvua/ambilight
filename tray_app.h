@@ -28,6 +28,7 @@ public:
     explicit TrayApp(AppSettings &settings, Capturer &capturer) : capturer(capturer), settings(settings) {
         connect(this, &TrayApp::staticColorChanged, &capturer, &Capturer::setStaticColor);
         connect(this, &TrayApp::staticColorSwitched, &capturer, &Capturer::enableStaticColor);
+        connect(this, &TrayApp::brightnessChanged, &capturer, &Capturer::setBrightness);
     }
 
     void createTrayIcon() {
@@ -93,7 +94,10 @@ public:
         brightnessSlider->setRange(0, 100);
         brightnessSlider->setValue(100);
         brightnessLayout->addWidget(brightnessSlider);
-        connect(brightnessSlider, &QSlider::valueChanged, this, &TrayApp::setBrightness);
+        connect(brightnessSlider, &QSlider::valueChanged, this, [this](int value) {
+            settings.brightness = value;
+            Q_EMIT brightnessChanged();
+        });
 
         auto *brightnessValue = new QLabel("100%");
         brightnessLayout->addWidget(brightnessValue);
@@ -161,16 +165,14 @@ Q_SIGNALS:
 
     void staticColorSwitched();
 
+    void brightnessChanged();
+
 public Q_SLOTS:
 
     void start() {
         qDebug() << "TrayApp is running in thread " << QThread::currentThreadId();
         createSettingsWindow();
         createTrayIcon();
-    }
-
-    void setBrightness(int value) {
-        capturer.setBrightness(value);
     }
 
     static void quit() {

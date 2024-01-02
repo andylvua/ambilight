@@ -29,6 +29,7 @@ public:
     Color staticColor = Color(0, 0, 0);
     bool enableStaticColor = false;
     bool enableGUI = true;
+    int brightness = 100;
 };
 
 #endif //AMBILIGHT_APP_SETTINGS_H

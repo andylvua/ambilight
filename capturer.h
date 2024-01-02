@@ -36,7 +36,7 @@ class ColorSender : public QObject {
 Q_OBJECT
 
 public:
-    explicit ColorSender() {
+    explicit ColorSender(int sendRate) : sendRate(sendRate) {
         connect(this, &ColorSender::sendColors, &serialWriter, &SerialWriter::write);
     }
 
@@ -63,7 +63,7 @@ public Q_SLOTS:
     void start() {
         sendTimer = new QTimer(nullptr);
         connect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
-        sendTimer->setInterval(1000 / 40);
+        sendTimer->setInterval(1000 / sendRate);
         sendTimer->start();
     }
 
@@ -92,6 +92,8 @@ private:
     bool isProcessing = false;
     bool timeout = false;
     int timeoutCounter = 0;
+
+    int sendRate;
 };
 
 class Capturer : public QObject {
@@ -99,7 +101,7 @@ Q_OBJECT
 
 public:
     Capturer(AppSettings &settings, XDisplay &display, Displayer &displayer) :
-            settings(settings), display(display), displayer(displayer) {
+            settings(settings), display(display), displayer(displayer), colorSender(settings.capturerConfig.targetFPS) {
         initZoneProperties();
 
         previousColors = QVector<Color>(colorsSize());
@@ -162,7 +164,7 @@ public:
 
         for (int i = 0; i < settings.capturerConfig.ledX; i++) {
             auto color = getAverageColor(screenImage.bottomPanel,
-                                         (i + 1) * zoneConfig.widthX + zoneConfig.rowOffset,
+                                         i * zoneConfig.widthX,
                                          0,
                                          zoneConfig.widthX,
                                          zoneConfig.heightX);
@@ -171,14 +173,14 @@ public:
         for (int i = settings.capturerConfig.ledY - 1; i >= 0; i--) {
             auto color = getAverageColor(screenImage.rightPanel,
                                          0,
-                                         (i + 1) * zoneConfig.heightY + zoneConfig.colOffset,
+                                         i * zoneConfig.heightY,
                                          zoneConfig.widthY,
                                          zoneConfig.heightY);
             res.push_back(color);
         }
         for (int i = settings.capturerConfig.ledX - 1; i >= 0; i--) {
             auto color = getAverageColor(screenImage.topPanel,
-                                         (i + 1) * zoneConfig.widthX + zoneConfig.rowOffset,
+                                         i * zoneConfig.widthX,
                                          0,
                                          zoneConfig.widthX,
                                          zoneConfig.heightX);
@@ -187,7 +189,7 @@ public:
         for (int i = 0; i < settings.capturerConfig.ledY; i++) {
             auto color = getAverageColor(screenImage.leftPanel,
                                          0,
-                                         (i + 1) * zoneConfig.heightY + zoneConfig.colOffset,
+                                         i * zoneConfig.heightY,
                                          zoneConfig.widthY,
                                          zoneConfig.heightY);
             res.push_back(color);
@@ -265,35 +267,35 @@ public:
             return XGetImage(display.display,
                              display.root,
                              0,
-                             zoneConfig.heightY,
+                             zoneConfig.heightY + zoneConfig.colOffset,
                              zoneConfig.widthY,
-                             display.height - zoneConfig.heightY,
+                             display.height - (zoneConfig.heightY - zoneConfig.colOffset) * 2,
                              AllPlanes, ZPixmap);
         });
         auto rightPanelFuture = QtConcurrent::run([this] {
             return XGetImage(display.display,
                              display.root,
                              display.width - zoneConfig.widthY,
-                             zoneConfig.heightY,
+                             zoneConfig.heightY + zoneConfig.colOffset,
                              zoneConfig.widthY,
-                             display.height - zoneConfig.heightY,
+                             display.height - (zoneConfig.heightY - zoneConfig.colOffset) * 2,
                              AllPlanes, ZPixmap);
         });
         auto topPanelFuture = QtConcurrent::run([this] {
             return XGetImage(display.display,
                              display.root,
-                             zoneConfig.widthX,
+                             zoneConfig.widthX + zoneConfig.rowOffset,
                              0,
-                             display.width - zoneConfig.widthX,
+                             display.width - (zoneConfig.widthX - zoneConfig.rowOffset) * 2,
                              zoneConfig.heightX,
                              AllPlanes, ZPixmap);
         });
         auto bottomPanelFuture = QtConcurrent::run([this] {
             return XGetImage(display.display,
                              display.root,
-                             zoneConfig.widthX,
+                             zoneConfig.widthX + zoneConfig.rowOffset,
                              display.height - zoneConfig.heightX,
-                             display.width - zoneConfig.widthX,
+                             display.width - (zoneConfig.widthX - zoneConfig.rowOffset) * 2,
                              zoneConfig.heightX,
                              AllPlanes, ZPixmap);
         });
@@ -352,7 +354,7 @@ public:
     void renderColors() {
         auto _colors = colors;
 
-        auto brightness = colorConfig.brightness / 100.0;
+        auto brightness = settings.brightness / 100.0;
         for (auto &color: _colors) {
             color = color * brightness;
         }
@@ -370,7 +372,7 @@ public:
 private Q_SLOTS:
 
     void capture() {
-        qDebug() << "Capturer capture in thread: " << QThread::currentThreadId();
+//        qDebug() << "Capturer capture in thread: " << QThread::currentThreadId();
         destroyImages();
         captureImages();
 
@@ -382,11 +384,9 @@ private Q_SLOTS:
 
 public Q_SLOTS:
     void stop(bool turnOff = true) {
-        qDebug() << "Executing stop()";
         captureTimer->stop();
 
         if (turnOff) {
-            qDebug() << "Turning off";
             this->turnOff();
         }
     }
@@ -410,9 +410,7 @@ public Q_SLOTS:
         animateColorChange(staticColors);
     }
 
-    void setBrightness(int value) {
-        colorConfig.brightness = value;
-
+    void setBrightness() {
         renderColors();
     }
 
@@ -443,16 +441,11 @@ private:
         int colOffset = 0;
     } zoneConfig;
 
-    struct ColorConfig {
-        int brightness = 50;
-    } colorConfig;
-
     QTimer *captureTimer;
 
     QVector<Color> previousColors;
     QVector<Color> colors;
 
-//    SerialWriter serialWriter;
     ColorSender colorSender;
 };
 

@@ -31,9 +31,6 @@ int main(int argc, char *argv[]) {
             .height = height
     };
 
-    std::cout << "width: " << width << std::endl;
-    std::cout << "height: " << height << std::endl;
-
     Displayer displayer(appSettings, xDisplay);
 
     Capturer capturer(appSettings, xDisplay, displayer);
