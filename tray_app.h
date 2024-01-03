@@ -16,7 +16,9 @@
 #include <QColorDialog>
 #include <QIcon>
 #include <QMessageBox>
+#include <QComboBox>
 
+#include <csignal>
 
 #include "capturer.h"
 
@@ -25,10 +27,13 @@ class TrayApp : public QObject {
 Q_OBJECT
 
 public:
-    explicit TrayApp(AppSettings &settings, Capturer &capturer) : capturer(capturer), settings(settings) {
-        connect(this, &TrayApp::staticColorChanged, &capturer, &Capturer::setStaticColor);
-        connect(this, &TrayApp::staticColorSwitched, &capturer, &Capturer::enableStaticColor);
-        connect(this, &TrayApp::brightnessChanged, &capturer, &Capturer::setBrightness);
+    static TrayApp *instance;
+
+public:
+    explicit TrayApp(AppSettings &settings) : settings(settings) {
+        setupSignalHandlers();
+
+        QApplication::setQuitOnLastWindowClosed(false);
     }
 
     void createTrayIcon() {
@@ -42,7 +47,7 @@ public:
             startAction->setVisible(false);
             stopAction->setVisible(true);
         });
-        connect(startAction, &QAction::triggered, &capturer, &Capturer::restart);
+        connect(startAction, &QAction::triggered, this, &TrayApp::startCapturer);
         trayMenu->addAction(startAction);
         startAction->setVisible(false);
 
@@ -51,7 +56,7 @@ public:
             startAction->setVisible(true);
             stopAction->setVisible(false);
         });
-        connect(stopAction, SIGNAL(triggered()), &capturer, SLOT(stop()));
+        connect(stopAction, SIGNAL(triggered()), this, SIGNAL(stopCapturer()));
         trayMenu->addAction(stopAction);
 
         auto *quitAction = new QAction("Quit", this);
@@ -110,7 +115,6 @@ public:
         line->setFrameShadow(QFrame::Sunken);
         layout->addWidget(line);
 
-
         auto *staticColorLabel = new QLabel("Static color");
         staticColorLabel->setFont(labelFont);
         layout->addWidget(staticColorLabel);
@@ -154,18 +158,66 @@ public:
             }
         }, Qt::QueuedConnection);
 
-        settingsWindow->setAttribute(Qt::WA_QuitOnClose, false);
+        auto *line2 = new QFrame;
+        line2->setFixedHeight(15);
+        line2->setFrameShadow(QFrame::Sunken);
+        layout->addWidget(line2);
 
+        auto aspectRatioLabel = new QLabel("Aspect ratio");
+        aspectRatioLabel->setFont(labelFont);
+        layout->addWidget(aspectRatioLabel);
+
+        auto *aspectRatioDropdown = new QComboBox();
+        aspectRatioDropdown->addItem("Standard");
+        aspectRatioDropdown->addItem("Wide 21:9");
+        aspectRatioDropdown->addItem("Wide 24:10");
+        aspectRatioDropdown->addItem("Auto");
+        layout->addWidget(aspectRatioDropdown);
+
+        connect(aspectRatioDropdown, &QComboBox::currentTextChanged, this, [this](const QString &text) {
+            if (text == "Standard") {
+                settings.aspectRatio.setAspectRatio(STANDARD);
+            } else if (text == "Wide 21:9") {
+                settings.aspectRatio.setAspectRatio(WIDE_21_9);
+            } else if (text == "Wide 24:10") {
+                settings.aspectRatio.setAspectRatio(WIDE_24_10);
+            } else if (text == "Auto") {
+                settings.aspectRatio.setAspectRatio(AUTO);
+            }
+            Q_EMIT aspectRatioChanged();
+        });
+
+        settingsWindow->setAttribute(Qt::WA_QuitOnClose, false);
         settingsWindow->show();
     }
 
+    void sigtermHandler(int) {
+        quit();
+    }
+
+    static void sigtermHandlerStatic(int sig) {
+        instance->sigtermHandler(sig);
+    }
+
+    static void setupSignalHandlers() {
+//        struct sigaction sigIntHandler{};
+//        sigIntHandler.sa_handler = sigtermHandlerStatic;
+//
+//        sigaction(SIGTERM, &sigIntHandler, nullptr);
+    }
 Q_SIGNALS:
+
+    void startCapturer();
+
+    void stopCapturer();
 
     void staticColorChanged();
 
     void staticColorSwitched();
 
     void brightnessChanged();
+
+    void aspectRatioChanged();
 
 public Q_SLOTS:
 
@@ -175,19 +227,21 @@ public Q_SLOTS:
         createTrayIcon();
     }
 
-    static void quit() {
+    void quit() {
+        qDebug() << "Executing quit() in thread " << QThread::currentThreadId();
         auto *msgBox = new QMessageBox();
         msgBox->setWindowTitle("Quit");
         msgBox->setText("Close the application?");
         msgBox->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
         msgBox->setDefaultButton(QMessageBox::No);
         if (msgBox->exec() == QMessageBox::Yes) {
+            Q_EMIT stopCapturer();
+            QThread::sleep(1);
             QApplication::quit();
         }
     }
 
 private:
-    Capturer &capturer;
     AppSettings &settings;
 
     QAction *startAction;

@@ -17,7 +17,6 @@
 #include <QtGui/QPainter>
 #include <QtConcurrent/QtConcurrent>
 
-// use tbb concurrent bounded
 #include <tbb/concurrent_queue.h>
 
 #include <utility>
@@ -30,96 +29,22 @@
 #include "app_settings.h"
 #include "serial_writer.h"
 #include "xdisplay.h"
+#include "sender.h"
+#include "constants.h"
 
-
-class ColorSender : public QObject {
-Q_OBJECT
-
-public:
-    explicit ColorSender(int sendRate) : sendRate(sendRate) {
-        connect(this, &ColorSender::sendColors, &serialWriter, &SerialWriter::write);
-    }
-
-    void send() {
-//        qDebug() << "ColorSender send in thread: " << QThread::currentThreadId();
-        if (isProcessing) {
-            Q_EMIT sendColors(processedColors);
-            isProcessing = false;
-        } else {
-            timeoutCounter++;
-            if (timeoutCounter >= timeoutSlots) {
-                timeout = true;
-                timeoutCounter = 0;
-            }
-        }
-
-        if (timeout) {
-            disconnect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
-        }
-    }
-
-public Q_SLOTS:
-
-    void start() {
-        sendTimer = new QTimer(nullptr);
-        connect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
-        sendTimer->setInterval(1000 / sendRate);
-        sendTimer->start();
-    }
-
-    void processColors(const QVector<Color> &colors) {
-        if (timeout) {
-            timeout = false;
-            connect(sendTimer, &QTimer::timeout, this, &ColorSender::send);
-        }
-
-        processedColors = colors;
-        isProcessing = true;
-    }
-
-Q_SIGNALS:
-
-    void sendColors(QVector<Color> colors);
-
-private:
-    static constexpr auto timeoutSlots = 3;
-
-    QTimer *sendTimer;
-    SerialWriter serialWriter;
-
-    QVector<Color> processedColors;
-
-    bool isProcessing = false;
-    bool timeout = false;
-    int timeoutCounter = 0;
-
-    int sendRate;
-};
 
 class Capturer : public QObject {
 Q_OBJECT
 
 public:
-    Capturer(AppSettings &settings, XDisplay &display, Displayer &displayer) :
-            settings(settings), display(display), displayer(displayer), colorSender(settings.capturerConfig.targetFPS) {
+    Capturer(AppSettings &settings, const XDisplay &display) :
+            settings(settings), display(display) {
         initZoneProperties();
 
         previousColors = QVector<Color>(colorsSize());
         colors = QVector<Color>(colorsSize());
 
         qDebug() << "Enter this number of LEDs in the Arduino sketch: " << colorsSize();
-
-        QThreadPool::globalInstance()->setMaxThreadCount(4);
-
-        connect(this, &Capturer::sendColors, &colorSender, &ColorSender::processColors);
-        connect(this, &Capturer::displayColors, &displayer, &Displayer::render);
-
-        auto *colorSenderThread = new QThread();
-        colorSender.moveToThread(colorSenderThread);
-
-        QObject::connect(colorSenderThread, &QThread::started, &colorSender, &ColorSender::start);
-
-        colorSenderThread->start();
     }
 
     void initZoneProperties() {
@@ -132,6 +57,11 @@ public:
 
         zoneConfig.rowOffset = (display.width % (config.ledX + 2)) / 2;
         zoneConfig.colOffset = (display.height % (config.ledY + 2)) / 2;
+    }
+
+    void calculateBlackBarHeight() {
+        this->zoneConfig.blackBarHeight =
+                static_cast<int>(display.height - display.width / settings.aspectRatio.getRatio()) / 2;
     }
 
     [[nodiscard]] qsizetype colorsSize() const {
@@ -231,7 +161,7 @@ public:
             if (totalElapsed.elapsed() >= frameDuration * framesToRender) {
                 break;
             } else if (i != framesToInterpolate) {
-                QThread::msleep(frameDuration - 3);
+                QThread::msleep(frameDuration - Constants::Capturer::INTERPOLATION_TOLERANCE);
             }
         }
     }
@@ -285,7 +215,7 @@ public:
             return XGetImage(display.display,
                              display.root,
                              zoneConfig.widthX + zoneConfig.rowOffset,
-                             0,
+                             zoneConfig.blackBarHeight,
                              display.width - (zoneConfig.widthX - zoneConfig.rowOffset) * 2,
                              zoneConfig.heightX,
                              AllPlanes, ZPixmap);
@@ -294,7 +224,7 @@ public:
             return XGetImage(display.display,
                              display.root,
                              zoneConfig.widthX + zoneConfig.rowOffset,
-                             display.height - zoneConfig.heightX,
+                             display.height - zoneConfig.heightX - zoneConfig.blackBarHeight,
                              display.width - (zoneConfig.widthX - zoneConfig.rowOffset) * 2,
                              zoneConfig.heightX,
                              AllPlanes, ZPixmap);
@@ -324,6 +254,10 @@ public:
         captureTimer->setInterval(1000 / settings.capturerConfig.captureFPS);
         captureTimer->start();
 
+        blackBarDetectionTimer = new QTimer(nullptr);
+        connect(blackBarDetectionTimer, &QTimer::timeout, this, &Capturer::detectBlackBar);
+        blackBarDetectionTimer->setInterval(Constants::Capturer::BLACK_BAR_DETECTION_INTERVAL);
+
         capture();
     }
 
@@ -336,7 +270,6 @@ public:
 
         capture();
     }
-
 
 
     void turnOff() {
@@ -359,14 +292,8 @@ public:
             color = color * brightness;
         }
 
-        if (settings.enableGUI) {
-            displayer.setColors(_colors);
-            Q_EMIT displayColors();
-        } else {
-            Q_EMIT sendColors(_colors);
-        }
+        Q_EMIT colorsReady(_colors);
     }
-
 
 
 private Q_SLOTS:
@@ -382,8 +309,58 @@ private Q_SLOTS:
         interpolateColors();
     }
 
+    void detectBlackBar() {
+        using namespace Constants::Capturer;
+
+        auto verticalLine = XGetImage(display.display,
+                                      display.root,
+                                      display.width / 2,
+                                      0,
+                                      1,
+                                      display.height,
+                                      AllPlanes, ZPixmap);
+
+        auto isBlack = [](int pixel) {
+            int red = pixel >> 16 & 0xFF;
+            int green = pixel >> 8 & 0xFF;
+            int blue = pixel & 0xFF;
+
+            return red < BLACK_BAR_DETECTION_COLOR_THRESHOLD &&
+                   green < BLACK_BAR_DETECTION_COLOR_THRESHOLD &&
+                   blue < BLACK_BAR_DETECTION_COLOR_THRESHOLD;
+        };
+
+        for (int i = 0; i < BLACK_BAR_DETECTION_HEIGHT; i++) {
+            int pixel = XGetPixel(verticalLine, 0, i);
+            if (!isBlack(pixel)) {
+                zoneConfig.blackBarHeight = 0;
+                return;
+            }
+        }
+        for (int i = display.height - BLACK_BAR_DETECTION_HEIGHT; i < display.height; i++) {
+            int pixel = XGetPixel(verticalLine, 0, i);
+            if (!isBlack(pixel)) {
+                zoneConfig.blackBarHeight = 0;
+                return;
+            }
+        }
+
+        for (int i = BLACK_BAR_DETECTION_HEIGHT; i < display.height / 2; i++) {
+            int pixel = XGetPixel(verticalLine, 0, i);
+            if (!isBlack(pixel)) {
+                zoneConfig.blackBarHeight = i;
+                break;
+            }
+        }
+
+        XDestroyImage(verticalLine);
+//        qDebug() << "Black bar height: " << zoneConfig.blackBarHeight;
+    }
+
 public Q_SLOTS:
+
     void stop(bool turnOff = true) {
+        qDebug() << "Capturer stop in thread: " << QThread::currentThreadId();
         captureTimer->stop();
 
         if (turnOff) {
@@ -414,15 +391,27 @@ public Q_SLOTS:
         renderColors();
     }
 
+    void setAspectRatio() {
+        if (settings.aspectRatio.value == STANDARD) {
+            zoneConfig.blackBarHeight = 0;
+            return;
+        }
+        if (settings.aspectRatio.value == AUTO) {
+            blackBarDetectionTimer->start();
+            return;
+        } else {
+            blackBarDetectionTimer->stop();
+        }
+
+        calculateBlackBarHeight();
+    }
+
 Q_SIGNALS:
 
-    void sendColors(QVector<Color> colors);
-
-    void displayColors();
+    void colorsReady(QVector<Color> &colors);
 
 private:
     AppSettings &settings;
-    Displayer &displayer;
     XDisplay display;
 
     struct ScreenImage {
@@ -439,14 +428,14 @@ private:
         int heightX = 0;
         int rowOffset = 0;
         int colOffset = 0;
+        int blackBarHeight = 0;
     } zoneConfig;
 
-    QTimer *captureTimer;
+    QTimer *captureTimer = nullptr;
+    QTimer *blackBarDetectionTimer = nullptr;
 
     QVector<Color> previousColors;
     QVector<Color> colors;
-
-    ColorSender colorSender;
 };
 
 #endif //AMBILIGHT_CAPTURER_H

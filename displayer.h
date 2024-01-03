@@ -19,28 +19,28 @@ class Displayer : public QWidget {
 
 public:
 
-    Displayer(AppSettings &settings, XDisplay &display) : settings(settings), display(display) {
+    Displayer(AppSettings &settings, const XDisplay &display) : settings(settings), display(display) {
         setWindowTitle("Ambilight");
         setWindowIcon(QIcon("../ambilight.png"));
-        // make full screen
-//        setGeometry(0, 0, display.width, display.height);
 
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_NoSystemBackground);
         setAttribute(Qt::WA_OpaquePaintEvent);
 
         setStyleSheet("background:transparent;");
-
-//        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-    }
-
-    void setColors(QVector<Color> &_colors) {
-        this->colors = _colors;
     }
 
     void render() {
         repaint();
     }
+
+public Q_SLOTS:
+
+    void setColors(QVector<Color> &_colors) {
+        this->colors = _colors;
+        render();
+    }
+
 
 protected:
     void paintEvent(QPaintEvent *event) override {

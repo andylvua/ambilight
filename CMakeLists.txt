@@ -14,7 +14,10 @@ add_executable(ambilight main.cpp
         tray_app.h
         serial_writer.h
         xdisplay.h
-        app_settings.h)
+        app_settings.h
+        constants.h
+        sender.h
+        ambilight.h)
 add_executable(ambilight_test test.cpp)
 
 

@@ -12,6 +12,8 @@
 #include <QtCore/QDebug>
 
 #include "color.h"
+#include "constants.h"
+
 
 class SerialWriter : public QObject {
 Q_OBJECT
@@ -23,7 +25,7 @@ public:
         auto availablePort = QSerialPortInfo::availablePorts().first();
 
         serialPort->setPortName(availablePort.portName());
-        serialPort->setBaudRate(250000);
+        serialPort->setBaudRate(Constants::Serial::BAUD_RATE);
         serialPort->setDataBits(QSerialPort::Data8);
         serialPort->setParity(QSerialPort::NoParity);
         serialPort->setStopBits(QSerialPort::OneStop);
@@ -32,13 +34,13 @@ public:
         qDebug() << "Opening serial port";
         if (serialPort->open(QIODevice::ReadWrite)) {
             QByteArray data;
-            if (serialPort->waitForReadyRead(5000)) {
+            if (serialPort->waitForReadyRead(Constants::Serial::INIT_TIMEOUT)) {
                 data = serialPort->readAll();
-                while (serialPort->waitForReadyRead(100)) {
+                while (serialPort->waitForReadyRead(Constants::Serial::READ_TIMEOUT)) {
                     data += serialPort->readAll();
                 }
 
-                if (data == "al_ready") {
+                if (data == Constants::Serial::INIT_MESSAGE) {
                     qDebug() << "Arduino is ready to receive data";
                 } else {
                     qDebug() << "Received unexpected data:" << data;
@@ -53,73 +55,30 @@ public:
 
         connect(serialPort, &QSerialPort::readyRead, [&]() {
             QByteArray data = serialPort->readAll();
-            qDebug() << "RECIEVED SOME DATA: " << data;
+            qDebug() << "RECIEVED DATA: " << data;
         });
- }
-
-public Q_SLOTS:
+    }
 
     void write(const QVector<Color> &colors) {
-        // remove each 2nd color to reduce data size
-//        QVector<Color> reducedColors;
-//        for (int i = 0; i < colors.size(); i++) {
-//            if (i % 2 == 0) {
-//                reducedColors.append(colors[i]);
-//            }
-//        }
-
         auto data = Color::toByteArray(colors);
 
-        // if "Ada" is contained among data, print ADA IN DATA to stdout
-        bool ada = false;
-        for (int i = 0; i < data.size() - 2; i++) {
-            if (data[i] == 'A' && data[i + 1] == 'd' && data[i + 2] == 'a') {
-                ada = true;
-                break;
-            }
-        }
-        if (ada) {
-            qDebug() << "ADA IN DATA";
-        }
+        serialPort->write(Constants::Serial::RECEIVE_MESSAGE);
 
-
-
-
-        serialPort->write("rcv");
-        // immediately following the magic word
-        //// are three bytes: a 16-bit count of the number of LEDs (high byte
-        //// first) followed by a simple checksum value (high byte XOR low byte
-        //// XOR 0x55)
         uint16_t count = colors.size();
         uint8_t highByte = count >> 8;
         uint8_t lowByte = count & 0xFF;
-        uint8_t checksum = highByte ^ lowByte ^ 0x55;
+        uint8_t checksum = highByte ^ lowByte ^ Constants::Serial::CHECKSUM_MAGIC;
 
         serialPort->write(reinterpret_cast<const char *>(&highByte), 1);
         serialPort->write(reinterpret_cast<const char *>(&lowByte), 1);
         serialPort->write(reinterpret_cast<const char *>(&checksum), 1);
 
-
-
-
-//        qDebug() << "Sending array where first color is " << colors.first() << " and last color is " << colors.last();
         serialPort->write(data);
         serialPort->flush();
-//
-//        if (!serialPort->waitForBytesWritten(1000)) {
-//            throw std::runtime_error("Write error");
-//        }
-
-        sendCount++;
     }
 
 private:
     QSerialPort *serialPort;
-
-    size_t sendCount = 0;
-
-    Color firstColor;
-    Color lastColor;
 };
 
 #endif //AMBILIGHT_SERIAL_WRITER_H
