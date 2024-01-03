@@ -22,7 +22,7 @@ public:
 
     void send() {
         if (isProcessing) {
-            serialWriter->write(processedColors);
+            serialWriter->writeColors(processedColors);
             isProcessing = false;
         } else {
             timeoutCounter++;

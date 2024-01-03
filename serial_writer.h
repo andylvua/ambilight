@@ -14,6 +14,9 @@
 #include "color.h"
 #include "constants.h"
 
+enum Effects {
+    PACIFICA = 1,
+};
 
 class SerialWriter : public QObject {
 Q_OBJECT
@@ -59,26 +62,78 @@ public:
         });
     }
 
-    void write(const QVector<Color> &colors) {
+    void writeColors(const QVector<Color> &colors) {
         auto data = Color::toByteArray(colors);
 
-        serialPort->write(Constants::Serial::RECEIVE_MESSAGE);
+        uint8_t count = colors.size();
+        uint8_t opcode = 1;
 
-        uint16_t count = colors.size();
-        uint8_t highByte = count >> 8;
-        uint8_t lowByte = count & 0xFF;
-        uint8_t checksum = highByte ^ lowByte ^ Constants::Serial::CHECKSUM_MAGIC;
-
-        serialPort->write(reinterpret_cast<const char *>(&highByte), 1);
-        serialPort->write(reinterpret_cast<const char *>(&lowByte), 1);
-        serialPort->write(reinterpret_cast<const char *>(&checksum), 1);
+        writeHeader({count, opcode});
 
         serialPort->write(data);
         serialPort->flush();
     }
 
+    void writeEffect(Effects effect) {
+        uint8_t count = 0;
+        uint8_t opcode = 2;
+
+        QByteArray data;
+        int retries = 0;
+
+        disconnect(serialPort, &QSerialPort::readyRead, nullptr, nullptr);
+        while (retries < Constants::Serial::SEND_RETRIES) {
+            writeHeader({count, opcode});
+
+            if (serialPort->waitForReadyRead(Constants::Serial::READ_TIMEOUT)) {
+                data = serialPort->readAll();
+                while (serialPort->waitForReadyRead(Constants::Serial::READ_TIMEOUT)) {
+                    data += serialPort->readAll();
+                }
+
+                if (data == Constants::Serial::EFFECT_MESSAGE) {
+                    break;
+                } else {
+                    retries++;
+                }
+            } else {
+                retries++;
+            }
+        }
+        connect(serialPort, &QSerialPort::readyRead, [&]() {
+            QByteArray data = serialPort->readAll();
+            qDebug() << "RECIEVED DATA: " << data;
+        });
+
+        if (retries == Constants::Serial::SEND_RETRIES) {
+            qDebug() << "Failed to send effect";
+            return;
+        } else {
+            qDebug() << "Effect sent";
+        }
+
+        serialPort->write(reinterpret_cast<const char *>(&effect), 1);
+        serialPort->flush();
+    }
+
 private:
     QSerialPort *serialPort;
+
+    struct SendHeader {
+        uint8_t count;
+        uint8_t opcode;
+        uint8_t checksum;
+
+        SendHeader(uint8_t count, uint8_t opcode) : count(count), opcode(opcode) {
+            checksum = count ^ opcode ^ Constants::Serial::CHECKSUM_MAGIC;
+        }
+    };
+
+    void writeHeader(SendHeader header) {
+        serialPort->write(Constants::Serial::RECEIVE_MESSAGE);
+        serialPort->write(reinterpret_cast<const char *>(&header), 3);
+        serialPort->flush();
+    }
 };
 
 #endif //AMBILIGHT_SERIAL_WRITER_H
